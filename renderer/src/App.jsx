@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useCallback } from 'react';
 
 export default function App() {
   const [files, setFiles] = useState([]); // [{path,name,title,notes}]
@@ -77,9 +77,9 @@ function MainWork({ files, onAdd }) {
   const [activeFile, setActiveFile] = useState(files[0]?.path);
   const [draft, setDraft] = useState('');
   const [chat, setChat] = useState([]); // {role:'user'|'ai', content}
-  const [leftWidth, setLeftWidth] = useState(320);
-  const [rightWidth, setRightWidth] = useState(360);
-  const [isDragging, setIsDragging] = useState(null); // 'left' | 'right' | null
+  const [panels, setPanels] = useState([25, 50, 25]); // Percentages for left, center, right
+  const containerRef = useRef(null);
+  const isDraggingRef = useRef(null); // 'left' | 'right' | null
 
   const activeFileObj = useMemo(() => files.find(f => f.path === activeFile) || {}, [files, activeFile]);
   const activeGroups = activeFileObj.groups || [];
@@ -93,76 +93,57 @@ function MainWork({ files, onAdd }) {
     setTimeout(() => setChat(c => [...c, { role: 'ai', content: '（AI占位回复：将基于所选 PDF 的笔记进行辅助写作。）' }]), 300);
   };
 
-  // 处理拖拽调整面板宽度
-  const handleMouseDown = (type) => (e) => {
-    e.preventDefault();
-    setIsDragging(type);
-  };
+  const handleMouseMove = useCallback((e) => {
+    if (isDraggingRef.current === null) return;
 
-  const handleMouseMove = (e) => {
-    if (!isDragging) return;
-    
-    const containerWidth = window.innerWidth;
-    const minLeftWidth = 200;
-    const minCenterWidth = 300;
-    const minRightWidth = 200;
-    
-    if (isDragging === 'left') {
-      const newLeftWidth = Math.max(minLeftWidth, Math.min(e.clientX, containerWidth - minCenterWidth - minRightWidth));
-      const remainingWidth = containerWidth - newLeftWidth;
-      const rightRatio = rightWidth / (containerWidth - leftWidth);
-      const newRightWidth = Math.max(minRightWidth, remainingWidth * rightRatio);
-      
-      setLeftWidth(newLeftWidth);
-      setRightWidth(newRightWidth);
-    } else if (isDragging === 'right') {
-      const newRightWidth = Math.max(minRightWidth, Math.min(containerWidth - e.clientX, containerWidth - leftWidth - minCenterWidth));
-      setRightWidth(newRightWidth);
-    }
-  };
+    const container = containerRef.current;
+    if (!container) return;
 
-  const handleMouseUp = () => {
-    setIsDragging(null);
-  };
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const totalWidth = rect.width;
 
-  // 添加全局鼠标事件监听
-  useMemo(() => {
-    const cleanup = () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-    
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      return cleanup;
-    }
-    
-    return cleanup;
-  }, [isDragging, leftWidth, rightWidth]);
-
-  // 窗口大小变化时调整面板比例
-  useMemo(() => {
-    const handleResize = () => {
-      const newWidth = window.innerWidth;
-      const oldCenterWidth = newWidth - leftWidth - rightWidth;
-      if (oldCenterWidth < 300) {
-        // 如果中间区域太小，按比例重新分配
-        const totalWidth = newWidth;
-        const newRightWidth = Math.max(200, totalWidth * 0.25);
-        const newCenterWidth = Math.max(300, totalWidth * 0.45);
-        setRightWidth(newRightWidth);
+    setPanels(currentPanels => {
+      const newPanels = [...currentPanels];
+      if (isDraggingRef.current === 'left') {
+        const leftWidth = (x / totalWidth) * 100;
+        const rightWidth = newPanels[2];
+        const centerWidth = 100 - leftWidth - rightWidth;
+        if (leftWidth > 10 && centerWidth > 20) {
+          newPanels[0] = leftWidth;
+          newPanels[1] = centerWidth;
+        }
+      } else if (isDraggingRef.current === 'right') {
+        const rightWidth = ((totalWidth - x) / totalWidth) * 100;
+        const leftWidth = newPanels[0];
+        const centerWidth = 100 - leftWidth - rightWidth;
+        if (rightWidth > 10 && centerWidth > 20) {
+          newPanels[2] = rightWidth;
+          newPanels[1] = centerWidth;
+        }
       }
-    };
+      return newPanels;
+    });
+  }, []);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [leftWidth, rightWidth]);
+  const handleMouseUp = useCallback(() => {
+    isDraggingRef.current = null;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseMove]);
 
-  const centerWidth = `calc(100vw - ${leftWidth}px - ${rightWidth}px - 8px)`;
+  const handleMouseDown = useCallback((divider) => (e) => {
+    e.preventDefault();
+    isDraggingRef.current = divider;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [handleMouseMove, handleMouseUp]);
 
   return (
-    <div style={{ ...styles.shell, gridTemplateColumns: `${leftWidth}px 4px ${centerWidth} 4px ${rightWidth}px` }}>
+    <div 
+      ref={containerRef}
+      style={{ ...styles.shell, gridTemplateColumns: `${panels[0]}% 4px ${panels[1]}% 4px ${panels[2]}%` }}
+    >
       {/* 左栏：PDF 标题与划线笔记 */}
       <aside style={styles.leftPane}>
         <div style={styles.leftHeader}>
@@ -174,16 +155,7 @@ function MainWork({ files, onAdd }) {
             if (res?.ok && res.data?.length) onAdd(res.data);
           }}>添加</button>
         </div>
-        <div style={styles.fileList}>
-          {files.map(f => (
-            <div key={f.path} style={{ ...styles.fileItem, ...(f.path === activeFile ? styles.fileItemActive : null) }} onClick={() => setActiveFile(f.path)}>
-              <div style={styles.fileName}>{f.name}</div>
-              <div style={styles.fileMeta}>{f.title || '—'}</div>
-              <div style={styles.noteCount}>{(f.groups || f.notes || []).length} 组高亮</div>
-            </div>
-          ))}
-        </div>
-        <div style={styles.notesWrap}>
+        <div style={styles.notesWrap}>  {/* 高亮列表 */}
           <div style={styles.notesHeader}>来自：{activeTitle || activeName}</div>
           <div style={styles.notesContent} className="notes-content">
             {activeGroups.length === 0 ? (
@@ -300,14 +272,13 @@ const styles = {
   error: { color: '#c00', marginTop: 8 },
 
   shell: { display: 'grid', width: '100vw', height: '100vh', gap: 0, overflow: 'hidden', background: 'var(--bg,transparent)' },
-  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 180px 1fr', minWidth: 0, height: '100vh' },
+  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 1fr', minWidth: 0, height: '100vh' },
   leftHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', fontWeight: 600 },
-  fileList: { overflow: 'auto', padding: '8px 8px 12px' },
   fileItem: { padding: '8px 10px', borderRadius: 8, border: '1px solid #8883', marginBottom: 6, cursor: 'pointer' },
   fileItemActive: { borderColor: '#4b8efa', background: '#4b8efa22' },
   fileName: { fontSize: 13, wordBreak: 'break-all' },
   noteCount: { opacity: 0.7, fontSize: 12 },
-  notesWrap: { borderTop: '1px solid #8883', height: '100%', display: 'flex', flexDirection: 'column' },
+  notesWrap: { borderTop: '1px solid #8883', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   notesHeader: { fontWeight: 600, padding: '10px 12px', borderBottom: '1px solid #8883', flexShrink: 0 },
   notesContent: { 
     overflowY: 'scroll', 
