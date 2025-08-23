@@ -1,11 +1,17 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { extractHighlightsFromFiles } = require('./main/pdf');
+const { extractHighlightsFromFiles } = require('./pdf');
+
+let mainWindow = null;
 
 function createWindow() {
-  const preloadPath = path.join(__dirname, 'preload.js');
+  const preloadPath = path.join(__dirname, '../preload/preload.js');
+  const distIndex = path.resolve(__dirname, '../../dist', 'index.html');
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+
   console.log('[main] preload path:', preloadPath, 'exists:', fs.existsSync(preloadPath));
+
   const win = new BrowserWindow({
     width: 1000,
     height: 700,
@@ -23,13 +29,14 @@ function createWindow() {
 
   win.removeMenu();
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     win.loadURL(devUrl);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    win.loadFile(path.join(__dirname, 'dist', 'index.html'));
+    win.loadFile(distIndex);
   }
+
+  mainWindow = win;
 }
 
 // Example IPC handler
@@ -38,11 +45,36 @@ ipcMain.handle('ping', () => 'pong');
 ipcMain.handle('dialog:openPDFs', async () => {
   const res = await dialog.showOpenDialog({
     title: '选择 PDF 文件',
-    properties: ['openFile', 'multiSelections'],
+    buttonLabel: '选择',
+    properties: [
+      'openFile',
+      'multiSelections',
+      'openDirectory',
+      'treatPackageAsDirectory',
+      'dontAddToRecent'
+    ],
     filters: [{ name: 'PDF', extensions: ['pdf'] }]
   });
   if (res.canceled) return [];
-  return res.filePaths || [];
+
+  const picked = res.filePaths || [];
+  const pdfs = new Set();
+
+  const walk = (p) => {
+    try {
+      const st = fs.statSync(p);
+      if (st.isDirectory()) {
+        for (const name of fs.readdirSync(p)) {
+          walk(path.join(p, name));
+        }
+      } else if (st.isFile()) {
+        if (path.extname(p).toLowerCase() === '.pdf') pdfs.add(p);
+      }
+    } catch {}
+  };
+
+  for (const p of picked) walk(p);
+  return Array.from(pdfs);
 });
 
 ipcMain.handle('pdf:extractHighlights', async (_evt, filePaths) => {
@@ -59,13 +91,26 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('com.vibewriting.app');
 }
 
-app.whenReady().then(() => {
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// Ensure single instance
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
-});
+
+  app.whenReady().then(() => {
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

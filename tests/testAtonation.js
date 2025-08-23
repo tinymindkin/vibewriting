@@ -1,7 +1,7 @@
 const path = require('path');
 
-// 导入PDF高亮提取函数
-const { extractHighlightsFromFiles } = require('../main/pdf.js');
+// 导入PDF高亮提取函数（位置已调整到 src/main/pdf.js）
+const { extractHighlightsFromFiles } = require('../src/main/pdf.js');
 
 async function testPDFHighlightExtraction() {
   console.log('🧪 开始测试PDF高亮提取...\n');

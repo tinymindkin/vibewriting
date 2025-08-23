@@ -314,3 +314,4 @@ const styles = {
   chatInputWrap: { display: 'flex', gap: 8, padding: 10, borderTop: '1px solid #8883' },
   chatInput: { flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #8885' }
 };
+

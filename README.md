@@ -24,7 +24,7 @@ npm run dev
 npm start
 ```
 
-Dev 模式会自动启动 Vite 开发服务器并在 Electron 中加载 `http://localhost:5173`。点击“向主进程 ping”测试 IPC（应返回 `Main replied: pong`）。
+Dev 模式会自动启动 Vite 开发服务器并在 Electron 中加载 `http://localhost:5174`。
 
 ### 热加载说明
 - 渲染进程热替换（HMR）：编辑 `renderer/src/App.jsx` 的任意文案，窗口将即时更新而无需手动刷新。
@@ -52,18 +52,15 @@ npm run pack
 - Linux: `build/icon.png`（至少 512x512）
 
 ## 结构说明
-- `main.js`：主进程入口，创建窗口、注册 IPC
-- `preload.js`：预加载脚本，使用 contextBridge 暴露安全的 API
-- `index.html`：渲染进程页面，带基础样式与演示按钮
-- `renderer.js`：渲染脚本，调用 `window.api.ping()` 与主进程通信
-- `package.json`：项目元信息与脚本
-- `build/`：存放打包图标与构建资源
-- `renderer/`：React + Vite 渲染进程源码
+- `src/main/`：主进程入口与模块（如 `pdf.js`）
+- `src/preload/`：预加载脚本，使用 contextBridge 暴露安全 API
+- `src/renderer/`：React + Vite 渲染进程源码
 - `dist/`：渲染进程构建输出（由 `vite build` 产生）
+- `build/`：存放打包图标与构建资源
 
 ## 安全与设置
-- 已启用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`
-- 设置了简单 CSP（Content Security Policy），仅允许同源资源
+- 已启用 `contextIsolation: true`、`nodeIntegration: false`、`webSecurity: true`
+- 生产构建中建议开启 `sandbox: true` 并添加合适的 CSP
 
 ## 常见问题
 - 如果 `npm start` 报找不到 `electron`，请确认依赖安装成功，或切换国内镜像源后重试

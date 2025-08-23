@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Minimal Electron app scaffold for VibeWriting.",
-  "main": "main.js",
+  "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5174 && cross-env VITE_DEV_SERVER_URL=http://localhost:5174 nodemon --watch main.js --watch preload.js --ext js,json --exec electron .\"",
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5174 && cross-env VITE_DEV_SERVER_URL=http://localhost:5174 nodemon --watch src/main --watch src/preload --ext js,json --exec electron .\"",
     "build:renderer": "vite build",
     "pack": "vite build && electron-builder --dir",
     "build": "vite build && electron-builder",
@@ -35,11 +35,11 @@
     "productName": "VibeWriting",
     "asar": true,
     "files": [
-      "main.js",
-      "preload.js",
+      "src/main/**",
+      "src/preload/**",
       "dist/**",
       "!**/*.map",
-      "!renderer/**",
+      "!src/renderer/**",
       "!**/out/**",
       "!**/coverage/**"
     ],
