@@ -74,17 +74,29 @@ function SelectPDFs({ onSelected }) {
 }
 
 function MainWork({ files, onAdd }) {
-  const [activeFile, setActiveFile] = useState(files[0]?.path);
+  const [activeFiles, setActiveFiles] = useState(new Set([files[0]?.path].filter(Boolean)));
   const [draft, setDraft] = useState('');
   const [chat, setChat] = useState([]); // {role:'user'|'ai', content}
   const [panels, setPanels] = useState([25, 50, 25]); // Percentages for left, center, right
   const containerRef = useRef(null);
   const isDraggingRef = useRef(null); // 'left' | 'right' | null
 
-  const activeFileObj = useMemo(() => files.find(f => f.path === activeFile) || {}, [files, activeFile]);
-  const activeGroups = activeFileObj.groups || [];
-  const activeName = activeFileObj.name || '';
-  const activeTitle = activeFileObj.title || '';
+  const activeFileObjs = useMemo(() => files.filter(f => activeFiles.has(f.path)), [files, activeFiles]);
+  const activeGroups = useMemo(() => {
+    const allGroups = [];
+    activeFileObjs.forEach(fileObj => {
+      if (fileObj.groups) {
+        fileObj.groups.forEach(group => {
+          allGroups.push({
+            ...group,
+            fileName: fileObj.name,
+            fileTitle: fileObj.title
+          });
+        });
+      }
+    });
+    return allGroups;
+  }, [activeFileObjs]);
 
   const sendMsg = (msg) => {
     if (!msg.trim()) return;
@@ -139,6 +151,24 @@ function MainWork({ files, onAdd }) {
     document.addEventListener('mouseup', handleMouseUp);
   }, [handleMouseMove, handleMouseUp]);
 
+  const handleFileClick = useCallback((filePath, e) => {
+    if (e.ctrlKey || e.metaKey) {
+      // Multi-select with Ctrl/Cmd
+      setActiveFiles(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(filePath)) {
+          newSet.delete(filePath);
+        } else {
+          newSet.add(filePath);
+        }
+        return newSet;
+      });
+    } else {
+      // Single select
+      setActiveFiles(new Set([filePath]));
+    }
+  }, []);
+
   return (
     <div 
       ref={containerRef}
@@ -155,25 +185,41 @@ function MainWork({ files, onAdd }) {
             if (res?.ok && res.data?.length) onAdd(res.data);
           }}>添加</button>
         </div>
-        <div style={styles.notesWrap}>  {/* 高亮列表 */}
+        <div style={styles.fileList}>
           {files.map(f => (
-            <div key={f.path} style={styles.notesHeader}>新的：{f.title || f.name}</div>
+            <div 
+              key={f.path} 
+              style={{ 
+                ...styles.fileItem, 
+                ...(activeFiles.has(f.path) ? styles.fileItemActive : {})
+              }} 
+              onClick={(e) => handleFileClick(f.path, e)}
+            >
+              <div style={styles.fileName}>{f.name}</div>
+              <div style={styles.fileMeta}>{f.title || '—'}</div>
+              <div style={styles.noteCount}>{(f.groups || f.notes || []).length} 组高亮</div>
+            </div>
           ))}
+        </div>
+        <div style={styles.notesWrap}>  {/* 高亮列表 */}
+          <div style={styles.notesHeader}>
+            已选择 {activeFiles.size} 个文件的高亮内容
+          </div>
           <div style={styles.notesContent} className="notes-content">
             {activeGroups.length === 0 ? (
               <div style={styles.empty}>未发现高亮注释。</div>
             ) : (
-              activeGroups.map(
-                (g, i) => (
+              activeGroups.map((g, i) => (
                 <div key={i} style={styles.noteItem}>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>第 {g.page} 页 · {g.count} 段</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>
+                    {g.fileName} - 第 {g.page} 页 · {g.count} 段
+                  </div>
                   {g.contents && g.contents.length ? (
                     <div style={{ fontWeight: 600 }}>{g.contents.join(' / ')}</div>
                   ) : null}
                   <div style={{ opacity: 0.95 }}>{g.text || '（无法从高亮中恢复文字）'}</div>
                 </div>
-              )
-            )
+              ))
             )}
           </div>
         </div>
@@ -276,12 +322,14 @@ const styles = {
   error: { color: '#c00', marginTop: 8 },
 
   shell: { display: 'grid', width: '100vw', height: '100vh', gap: 0, overflow: 'hidden', background: 'var(--bg,transparent)' },
-  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 1fr', minWidth: 0, height: '100vh' },
+  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 180px 1fr', minWidth: 0, height: '100vh' },
   leftHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', fontWeight: 600 },
   fileItem: { padding: '8px 10px', borderRadius: 8, border: '1px solid #8883', marginBottom: 6, cursor: 'pointer' },
   fileItemActive: { borderColor: '#4b8efa', background: '#4b8efa22' },
   fileName: { fontSize: 13, wordBreak: 'break-all' },
   noteCount: { opacity: 0.7, fontSize: 12 },
+  fileList: { overflow: 'auto', padding: '8px 8px 12px' },
+  fileMeta: { fontSize: 12, opacity: 0.7, marginTop: 2 },
   notesWrap: { borderTop: '1px solid #8883', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   notesHeader: { fontWeight: 600, padding: '10px 12px', borderBottom: '1px solid #8883', flexShrink: 0 },
   notesContent: { 
