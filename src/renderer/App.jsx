@@ -75,7 +75,11 @@ function SelectPDFs({ onSelected }) {
 
 function MainWork({ files, onAdd }) {
   const [activeFiles, setActiveFiles] = useState(new Set([files[0]?.path].filter(Boolean)));
-  const [draft, setDraft] = useState('');
+  const [drafts, setDrafts] = useState([{ id: 1, title: '草稿1', content: '' }]);
+  const [activeDraftId, setActiveDraftId] = useState(1);
+  const [nextDraftId, setNextDraftId] = useState(2);
+  const [editingTabId, setEditingTabId] = useState(null);
+  const [editingTitle, setEditingTitle] = useState('');
   const [chat, setChat] = useState([]); // {role:'user'|'ai', content}
   const [panels, setPanels] = useState([25, 50, 25]); // Percentages for left, center, right
   const containerRef = useRef(null);
@@ -169,6 +173,63 @@ function MainWork({ files, onAdd }) {
     }
   }, []);
 
+  const activeDraft = useMemo(() => drafts.find(d => d.id === activeDraftId), [drafts, activeDraftId]);
+
+  const updateDraftContent = useCallback((content) => {
+    setDrafts(prev => prev.map(d => 
+      d.id === activeDraftId ? { ...d, content } : d
+    ));
+  }, [activeDraftId]);
+
+  const createNewDraft = useCallback(() => {
+    const newDraft = {
+      id: nextDraftId,
+      title: `草稿${nextDraftId}`,
+      content: ''
+    };
+    setDrafts(prev => [...prev, newDraft]);
+    setActiveDraftId(nextDraftId);
+    setNextDraftId(prev => prev + 1);
+  }, [nextDraftId]);
+
+  const closeDraft = useCallback((draftId) => {
+    setDrafts(prev => {
+      const newDrafts = prev.filter(d => d.id !== draftId);
+      if (newDrafts.length === 0) {
+        // Create a new draft if all are closed
+        const newDraft = { id: nextDraftId, title: `草稿${nextDraftId}`, content: '' };
+        setNextDraftId(prev => prev + 1);
+        setActiveDraftId(nextDraftId);
+        return [newDraft];
+      }
+      // If active draft was closed, switch to first available
+      if (draftId === activeDraftId) {
+        setActiveDraftId(newDrafts[0].id);
+      }
+      return newDrafts;
+    });
+  }, [activeDraftId, nextDraftId]);
+
+  const startEditingTitle = useCallback((draftId, currentTitle) => {
+    setEditingTabId(draftId);
+    setEditingTitle(currentTitle);
+  }, []);
+
+  const saveTitle = useCallback(() => {
+    if (editingTabId && editingTitle.trim()) {
+      setDrafts(prev => prev.map(d => 
+        d.id === editingTabId ? { ...d, title: editingTitle.trim() } : d
+      ));
+    }
+    setEditingTabId(null);
+    setEditingTitle('');
+  }, [editingTabId, editingTitle]);
+
+  const cancelEditing = useCallback(() => {
+    setEditingTabId(null);
+    setEditingTitle('');
+  }, []);
+
   return (
     <div 
       ref={containerRef}
@@ -233,11 +294,61 @@ function MainWork({ files, onAdd }) {
 
       {/* 中栏：写作区域 */}
       <main style={styles.centerPane}>
-        <div style={styles.editorHeader}>写作区域</div>
+        <div style={styles.editorHeader}>
+          <div style={styles.tabContainer}>
+            <div style={styles.tabs}>
+              {drafts.map(draft => (
+                <div
+                  key={draft.id}
+                  style={{
+                    ...styles.tab,
+                    ...(draft.id === activeDraftId ? styles.tabActive : {})
+                  }}
+                  onClick={() => setActiveDraftId(draft.id)}
+                  onDoubleClick={() => startEditingTitle(draft.id, draft.title)}
+                >
+                  {editingTabId === draft.id ? (
+                    <input
+                      style={styles.tabTitleInput}
+                      value={editingTitle}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      onBlur={saveTitle}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          saveTitle();
+                        } else if (e.key === 'Escape') {
+                          cancelEditing();
+                        }
+                      }}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span style={styles.tabTitle}>{draft.title}</span>
+                  )}
+                  {drafts.length > 1 && (
+                    <button
+                      style={styles.tabCloseBtn}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeDraft(draft.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button style={styles.newTabBtn} onClick={createNewDraft}>
+              +
+            </button>
+          </div>
+        </div>
         <textarea
           placeholder="开始写作…（支持从左侧笔记拖拽/复制到此）"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
+          value={activeDraft?.content || ''}
+          onChange={e => updateDraftContent(e.target.value)}
           style={styles.textarea}
         />
       </main>
@@ -342,7 +453,61 @@ const styles = {
   empty: { padding: '10px 12px', opacity: 0.7 },
 
   centerPane: { display: 'grid', gridTemplateRows: 'auto 1fr' },
-  editorHeader: { padding: '10px 12px', borderBottom: '1px solid #8883', fontWeight: 600 },
+  editorHeader: { borderBottom: '1px solid #8883' },
+  tabContainer: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px' },
+  tabs: { display: 'flex', gap: 4 },
+  tab: { 
+    display: 'flex', 
+    alignItems: 'center', 
+    gap: 6, 
+    padding: '6px 12px', 
+    borderRadius: '6px 6px 0 0', 
+    border: '1px solid #8883', 
+    borderBottom: 'none',
+    background: '#f8f8f8', 
+    cursor: 'pointer',
+    fontSize: 13
+  },
+  tabActive: { 
+    background: 'white', 
+    borderColor: '#4b8efa',
+    color: '#4b8efa',
+    fontWeight: 600
+  },
+  tabTitle: { userSelect: 'none' },
+  tabTitleInput: { 
+    background: 'transparent', 
+    border: 'none', 
+    outline: 'none', 
+    fontSize: 13, 
+    fontWeight: 600,
+    color: 'inherit',
+    width: '80px',
+    padding: 0
+  },
+  tabCloseBtn: { 
+    background: 'none', 
+    border: 'none', 
+    cursor: 'pointer', 
+    fontSize: 16, 
+    lineHeight: 1,
+    padding: 0,
+    width: 16,
+    height: 16,
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  newTabBtn: { 
+    background: 'none', 
+    border: '1px solid #8883', 
+    cursor: 'pointer', 
+    fontSize: 14, 
+    padding: '4px 8px',
+    borderRadius: 4,
+    color: '#666'
+  },
   textarea: { width: '100%', height: '100%', border: 'none', outline: 'none', padding: 12, fontSize: 15, lineHeight: 1.6, resize: 'none' },
 
   rightPane: { display: 'grid', gridTemplateRows: 'auto 1fr auto' },
