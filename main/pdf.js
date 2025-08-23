@@ -74,7 +74,8 @@ async function extractHighlightedText(page, annotation) {
 
 async function extractHighlightsFromFile(filePath) {
   const pdfjsLib = await getPdfjs();
-  const data = fs.readFileSync(filePath);
+  const buffer = fs.readFileSync(filePath);
+  const data = new Uint8Array(buffer);
   const loadingTask = pdfjsLib.getDocument({ data, useWorkerFetch: false, isEvalSupported: false, disableWorker: true });
   const doc = await loadingTask.promise;
   let title = '';
