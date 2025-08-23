@@ -3,7 +3,8 @@ try {
   contextBridge.exposeInMainWorld('api', {
     ping: () => ipcRenderer.invoke('ping'),
     openPDFs: async () => ipcRenderer.invoke('dialog:openPDFs'),
-    extractHighlights: async (paths) => ipcRenderer.invoke('pdf:extractHighlights', paths)
+    extractHighlights: async (paths) => ipcRenderer.invoke('pdf:extractHighlights', paths),
+    aiChat: async (messages, systemPrompt) => ipcRenderer.invoke('ai:chat', messages, systemPrompt),
   });
   // Debug flag to verify preload executed
   try { window.__preload_ok = true; } catch {}

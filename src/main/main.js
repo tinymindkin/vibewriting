@@ -2,8 +2,16 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { extractHighlightsFromFiles } = require('./pdf');
+require('dotenv').config();
+const OpenAI = require('openai');
 
 let mainWindow = null;
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.API_KEY,
+  baseURL: process.env.BASE_URL,
+});
 
 function createWindow() {
   const preloadPath = path.join(__dirname, '../preload/preload.js');
@@ -82,6 +90,32 @@ ipcMain.handle('pdf:extractHighlights', async (_evt, filePaths) => {
     const result = await extractHighlightsFromFiles(filePaths);
     return { ok: true, data: result };
   } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
+ipcMain.handle('ai:chat', async (_evt, messages, systemPrompt) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.MODEL_NAME || 'qwen-max-latest',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages
+      ],
+      temperature: 0.7,
+      max_tokens: 2000,
+      stream: false
+    });
+
+    return { 
+      ok: true, 
+      data: {
+        content: completion.choices[0].message.content,
+        usage: completion.usage
+      }
+    };
+  } catch (e) {
+    console.error('[AI] Chat error:', e);
     return { ok: false, error: e?.message || String(e) };
   }
 });

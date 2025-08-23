@@ -74,13 +74,15 @@ function SelectPDFs({ onSelected }) {
 }
 
 function MainWork({ files, onAdd }) {
+  /*设置变量*/
   const [activeFiles, setActiveFiles] = useState(new Set([files[0]?.path].filter(Boolean)));
   const [drafts, setDrafts] = useState([{ id: 1, title: '草稿1', content: '' }]);
   const [activeDraftId, setActiveDraftId] = useState(1);
   const [nextDraftId, setNextDraftId] = useState(2);
   const [editingTabId, setEditingTabId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [chat, setChat] = useState([]); // {role:'user'|'ai', content}
+  const [chat, setChat] = useState([]); // {role:'user'|'assistant', content}
+  const [chatActive, setChatActive] = useState(true); // Controls chat input availability
   const [panels, setPanels] = useState([25, 50, 25]); // Percentages for left, center, right
   const containerRef = useRef(null);
   const isDraggingRef = useRef(null); // 'left' | 'right' | null
@@ -102,11 +104,43 @@ function MainWork({ files, onAdd }) {
     return allGroups;
   }, [activeFileObjs]);
 
-  const sendMsg = (msg) => {
-    if (!msg.trim()) return;
+  const sendMsg = async (msg) => {
+    if (!msg.trim() || !chatActive) return;
+    
+    // Disable chat input during API call
+    setChatActive(false);
+    
+    // Add user message
     setChat(c => [...c, { role: 'user', content: msg }]);
-    // 占位 AI 回复
-    setTimeout(() => setChat(c => [...c, { role: 'ai', content: '（AI占位回复：将基于所选 PDF 的笔记进行辅助写作。）' }]), 300);
+    
+    try {
+      // Prepare context from active highlights
+      const context = activeGroups.map(g => 
+        `文件: ${g.fileName} (第${g.page}页)\n内容: ${g.contents?.join(' / ') || ''}\n文本: ${g.text || ''}`
+      ).join('\n\n');
+      
+      const systemPrompt = `你是一个写作助手。用户正在基于PDF文件中的高亮内容进行写作。以下是用户当前选择的高亮内容：\n\n${context}\n\n请基于这些内容帮助用户进行写作，提供有用的建议、总结或扩展。`;
+      
+      // Get current chat history for context
+      const messages = chat.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content
+      }));
+      messages.push({ role: 'user', content: msg });
+      
+      const result = await window.api.aiChat(messages, systemPrompt);
+      
+      if (result?.ok) {
+        setChat(c => [...c, { role: 'assistant', content: result.data.content }]);
+      } else {
+        setChat(c => [...c, { role: 'assistant', content: `错误: ${result?.error || '未知错误'}` }]);
+      }
+    } catch (error) {
+      setChat(c => [...c, { role: 'assistant', content: `错误: ${error.message || '网络或API错误'}` }]);
+    } finally {
+      // Re-enable chat input after API call completes
+      setChatActive(true);
+    }
   };
 
   const handleMouseMove = useCallback((e) => {
@@ -369,30 +403,42 @@ function MainWork({ files, onAdd }) {
             </div>
           ))}
         </div>
-        <ChatInput onSend={sendMsg} />
+        <ChatInput onSend={sendMsg} disabled={!chatActive} />
       </section>
     </div>
   );
 }
 
-function ChatInput({ onSend }) {
+function ChatInput({ onSend, disabled }) {
   const [value, setValue] = useState('');
   return (
     <div style={styles.chatInputWrap}>
       <input
-        style={styles.chatInput}
+        style={{...styles.chatInput, opacity: disabled ? 0.6 : 1}}
         value={value}
         onChange={e => setValue(e.target.value)}
-        placeholder="向 AI 说明写作需求，回车发送"
+        placeholder={disabled ? "AI 正在思考中..." : "向 AI 说明写作需求，回车发送"}
+        disabled={disabled}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
+          if (e.key === 'Enter' && !e.shiftKey && !disabled) {
             e.preventDefault();
             onSend(value);
             setValue('');
           }
         }}
       />
-      <button style={styles.primaryBtn} onClick={() => { onSend(value); setValue(''); }}>发送</button>
+      <button 
+        style={{...styles.primaryBtn, opacity: disabled ? 0.6 : 1}} 
+        onClick={() => { 
+          if (!disabled) {
+            onSend(value); 
+            setValue(''); 
+          }
+        }}
+        disabled={disabled}
+      >
+        {disabled ? '⏳' : '发送'}
+      </button>
     </div>
   );
 }
@@ -510,9 +556,9 @@ const styles = {
   },
   textarea: { width: '100%', height: '100%', border: 'none', outline: 'none', padding: 12, fontSize: 15, lineHeight: 1.6, resize: 'none' },
 
-  rightPane: { display: 'grid', gridTemplateRows: 'auto 1fr auto' },
+  rightPane: { display: 'grid', gridTemplateRows: 'auto 1fr auto', overflow: 'hidden', height: '100vh' },
   chatHeader: { padding: '10px 12px', borderBottom: '1px solid #8883', fontWeight: 600 },
-  chatList: { padding: 12, overflow: 'auto' },
+  chatList: { padding: 12, overflow: 'auto', minHeight: 0 },
   
   resizeHandle: {
     background: '#ddd',
@@ -528,7 +574,7 @@ const styles = {
   chatBubble: { padding: '8px 10px', borderRadius: 10, marginBottom: 8, maxWidth: '92%' },
   userBubble: { background: '#4b8efa22', border: '1px solid #4b8efa55', marginLeft: 'auto' },
   aiBubble: { background: '#8882', border: '1px solid #8884' },
-  chatInputWrap: { display: 'flex', gap: 8, padding: 10, borderTop: '1px solid #8883' },
+  chatInputWrap: { display: 'flex', gap: 8, padding: 10, borderTop: '1px solid #8883', position: 'sticky', bottom: 0 },
   chatInput: { flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #8885' }
 };
 

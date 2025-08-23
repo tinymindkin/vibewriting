@@ -15,5 +15,6 @@ dist/
 out/
 coverage/
 .env
+.windsurf
 
 
