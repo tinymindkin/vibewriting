@@ -77,6 +77,9 @@ function MainWork({ files, onAdd }) {
   const [activeFile, setActiveFile] = useState(files[0]?.path);
   const [draft, setDraft] = useState('');
   const [chat, setChat] = useState([]); // {role:'user'|'ai', content}
+  const [leftWidth, setLeftWidth] = useState(320);
+  const [rightWidth, setRightWidth] = useState(360);
+  const [isDragging, setIsDragging] = useState(null); // 'left' | 'right' | null
 
   const activeFileObj = useMemo(() => files.find(f => f.path === activeFile) || {}, [files, activeFile]);
   const activeGroups = activeFileObj.groups || [];
@@ -90,8 +93,76 @@ function MainWork({ files, onAdd }) {
     setTimeout(() => setChat(c => [...c, { role: 'ai', content: '（AI占位回复：将基于所选 PDF 的笔记进行辅助写作。）' }]), 300);
   };
 
+  // 处理拖拽调整面板宽度
+  const handleMouseDown = (type) => (e) => {
+    e.preventDefault();
+    setIsDragging(type);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging) return;
+    
+    const containerWidth = window.innerWidth;
+    const minLeftWidth = 200;
+    const minCenterWidth = 300;
+    const minRightWidth = 200;
+    
+    if (isDragging === 'left') {
+      const newLeftWidth = Math.max(minLeftWidth, Math.min(e.clientX, containerWidth - minCenterWidth - minRightWidth));
+      const remainingWidth = containerWidth - newLeftWidth;
+      const rightRatio = rightWidth / (containerWidth - leftWidth);
+      const newRightWidth = Math.max(minRightWidth, remainingWidth * rightRatio);
+      
+      setLeftWidth(newLeftWidth);
+      setRightWidth(newRightWidth);
+    } else if (isDragging === 'right') {
+      const newRightWidth = Math.max(minRightWidth, Math.min(containerWidth - e.clientX, containerWidth - leftWidth - minCenterWidth));
+      setRightWidth(newRightWidth);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(null);
+  };
+
+  // 添加全局鼠标事件监听
+  useMemo(() => {
+    const cleanup = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return cleanup;
+    }
+    
+    return cleanup;
+  }, [isDragging, leftWidth, rightWidth]);
+
+  // 窗口大小变化时调整面板比例
+  useMemo(() => {
+    const handleResize = () => {
+      const newWidth = window.innerWidth;
+      const oldCenterWidth = newWidth - leftWidth - rightWidth;
+      if (oldCenterWidth < 300) {
+        // 如果中间区域太小，按比例重新分配
+        const totalWidth = newWidth;
+        const newRightWidth = Math.max(200, totalWidth * 0.25);
+        const newCenterWidth = Math.max(300, totalWidth * 0.45);
+        setRightWidth(newRightWidth);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [leftWidth, rightWidth]);
+
+  const centerWidth = `calc(100vw - ${leftWidth}px - ${rightWidth}px - 8px)`;
+
   return (
-    <div style={styles.shell}>
+    <div style={{ ...styles.shell, gridTemplateColumns: `${leftWidth}px 4px ${centerWidth} 4px ${rightWidth}px` }}>
       {/* 左栏：PDF 标题与划线笔记 */}
       <aside style={styles.leftPane}>
         <div style={styles.leftHeader}>
@@ -114,21 +185,29 @@ function MainWork({ files, onAdd }) {
         </div>
         <div style={styles.notesWrap}>
           <div style={styles.notesHeader}>来自：{activeTitle || activeName}</div>
-          {activeGroups.length === 0 ? (
-            <div style={styles.empty}>未发现高亮注释。</div>
-          ) : (
-            activeGroups.map((g, i) => (
-              <div key={i} style={styles.noteItem}>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>第 {g.page} 页 · {g.count} 段</div>
-                {g.contents && g.contents.length ? (
-                  <div style={{ fontWeight: 600 }}>{g.contents.join(' / ')}</div>
-                ) : null}
-                <div style={{ opacity: 0.95 }}>{g.text || '（无法从高亮中恢复文字）'}</div>
-              </div>
-            ))
-          )}
+          <div style={styles.notesContent} className="notes-content">
+            {activeGroups.length === 0 ? (
+              <div style={styles.empty}>未发现高亮注释。</div>
+            ) : (
+              activeGroups.map((g, i) => (
+                <div key={i} style={styles.noteItem}>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>第 {g.page} 页 · {g.count} 段</div>
+                  {g.contents && g.contents.length ? (
+                    <div style={{ fontWeight: 600 }}>{g.contents.join(' / ')}</div>
+                  ) : null}
+                  <div style={{ opacity: 0.95 }}>{g.text || '（无法从高亮中恢复文字）'}</div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </aside>
+
+      {/* 左侧调整柄 */}
+      <div 
+        style={styles.resizeHandle}
+        onMouseDown={handleMouseDown('left')}
+      />
 
       {/* 中栏：写作区域 */}
       <main style={styles.centerPane}>
@@ -140,6 +219,12 @@ function MainWork({ files, onAdd }) {
           style={styles.textarea}
         />
       </main>
+
+      {/* 右侧调整柄 */}
+      <div 
+        style={styles.resizeHandle}
+        onMouseDown={handleMouseDown('right')}
+      />
 
       {/* 右栏：AI 对话 */}
       <section style={styles.rightPane}>
@@ -179,6 +264,31 @@ function ChatInput({ onSend }) {
   );
 }
 
+// 添加全局滚动条样式
+const globalScrollbarStyles = `
+  .notes-content::-webkit-scrollbar {
+    width: 8px;
+  }
+  .notes-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+  }
+  .notes-content::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+  }
+  .notes-content::-webkit-scrollbar-thumb:hover {
+    background: #555;
+  }
+`;
+
+// 注入样式到页面
+if (typeof document !== 'undefined') {
+  const styleElement = document.createElement('style');
+  styleElement.innerHTML = globalScrollbarStyles;
+  document.head.appendChild(styleElement);
+}
+
 const styles = {
   screen: {
     minHeight: '100vh', display: 'grid', placeItems: 'center',
@@ -189,16 +299,22 @@ const styles = {
   smallBtn: { padding: '4px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
   error: { color: '#c00', marginTop: 8 },
 
-  shell: { display: 'grid', gridTemplateColumns: '320px 1fr 360px', height: '100vh', gap: 0, overflow: 'hidden', background: 'var(--bg,transparent)' },
-  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 180px 1fr', minWidth: 0 },
+  shell: { display: 'grid', width: '100vw', height: '100vh', gap: 0, overflow: 'hidden', background: 'var(--bg,transparent)' },
+  leftPane: { borderRight: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 180px 1fr', minWidth: 0, height: '100vh' },
   leftHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', fontWeight: 600 },
   fileList: { overflow: 'auto', padding: '8px 8px 12px' },
   fileItem: { padding: '8px 10px', borderRadius: 8, border: '1px solid #8883', marginBottom: 6, cursor: 'pointer' },
   fileItemActive: { borderColor: '#4b8efa', background: '#4b8efa22' },
   fileName: { fontSize: 13, wordBreak: 'break-all' },
   noteCount: { opacity: 0.7, fontSize: 12 },
-  notesWrap: { borderTop: '1px solid #8883', overflow: 'auto' },
-  notesHeader: { fontWeight: 600, padding: '10px 12px', borderBottom: '1px solid #8883' },
+  notesWrap: { borderTop: '1px solid #8883', height: '100%', display: 'flex', flexDirection: 'column' },
+  notesHeader: { fontWeight: 600, padding: '10px 12px', borderBottom: '1px solid #8883', flexShrink: 0 },
+  notesContent: { 
+    overflowY: 'scroll', 
+    flex: 1, 
+    minHeight: 0,
+    maxHeight: '100%'
+  },
   noteItem: { padding: '8px 12px', borderBottom: '1px dashed #8883' },
   empty: { padding: '10px 12px', opacity: 0.7 },
 
@@ -206,9 +322,21 @@ const styles = {
   editorHeader: { padding: '10px 12px', borderBottom: '1px solid #8883', fontWeight: 600 },
   textarea: { width: '100%', height: '100%', border: 'none', outline: 'none', padding: 12, fontSize: 15, lineHeight: 1.6, resize: 'none' },
 
-  rightPane: { borderLeft: '1px solid #8883', display: 'grid', gridTemplateRows: 'auto 1fr auto' },
+  rightPane: { display: 'grid', gridTemplateRows: 'auto 1fr auto' },
   chatHeader: { padding: '10px 12px', borderBottom: '1px solid #8883', fontWeight: 600 },
   chatList: { padding: 12, overflow: 'auto' },
+  
+  resizeHandle: {
+    background: '#ddd',
+    cursor: 'col-resize',
+    userSelect: 'none',
+    borderLeft: '1px solid #bbb',
+    borderRight: '1px solid #bbb',
+    transition: 'background-color 0.2s',
+    '&:hover': {
+      background: '#ccc'
+    }
+  },
   chatBubble: { padding: '8px 10px', borderRadius: 10, marginBottom: 8, maxWidth: '92%' },
   userBubble: { background: '#4b8efa22', border: '1px solid #4b8efa55', marginLeft: 'auto' },
   aiBubble: { background: '#8882', border: '1px solid #8884' },
