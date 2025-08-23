@@ -44,14 +44,14 @@ ipcMain.handle('ping', () => 'pong');
 
 ipcMain.handle('dialog:openPDFs', async () => {
   const res = await dialog.showOpenDialog({
-    title: '选择 PDF 文件',
-    buttonLabel: '选择',
+    title: '按住cmmand键选择多个 PDF 文件',
+    buttonLabel: '选择（按住cmmand键选择多个）',
     properties: [
       'openFile',
       'multiSelections',
-      'openDirectory',
-      'treatPackageAsDirectory',
-      'dontAddToRecent'
+      // 'openDirectory',
+      // 'treatPackageAsDirectory',
+      // 'dontAddToRecent'
     ],
     filters: [{ name: 'PDF', extensions: ['pdf'] }]
   });

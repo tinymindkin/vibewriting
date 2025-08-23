@@ -156,12 +156,15 @@ function MainWork({ files, onAdd }) {
           }}>添加</button>
         </div>
         <div style={styles.notesWrap}>  {/* 高亮列表 */}
-          <div style={styles.notesHeader}>来自：{activeTitle || activeName}</div>
+          {files.map(f => (
+            <div key={f.path} style={styles.notesHeader}>新的：{f.title || f.name}</div>
+          ))}
           <div style={styles.notesContent} className="notes-content">
             {activeGroups.length === 0 ? (
               <div style={styles.empty}>未发现高亮注释。</div>
             ) : (
-              activeGroups.map((g, i) => (
+              activeGroups.map(
+                (g, i) => (
                 <div key={i} style={styles.noteItem}>
                   <div style={{ fontSize: 12, opacity: 0.7 }}>第 {g.page} 页 · {g.count} 段</div>
                   {g.contents && g.contents.length ? (
@@ -169,7 +172,8 @@ function MainWork({ files, onAdd }) {
                   ) : null}
                   <div style={{ opacity: 0.95 }}>{g.text || '（无法从高亮中恢复文字）'}</div>
                 </div>
-              ))
+              )
+            )
             )}
           </div>
         </div>

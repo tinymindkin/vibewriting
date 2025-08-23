@@ -73,6 +73,7 @@ async function extractHighlightedText(page, annotation) {
 }
 
 async function extractHighlightsFromFile(filePath) {
+  /* */
   const pdfjsLib = await getPdfjs();
   const buffer = fs.readFileSync(filePath);
   const data = new Uint8Array(buffer);
