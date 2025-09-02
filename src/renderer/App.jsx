@@ -1,5 +1,210 @@
 import { useMemo, useState, useRef, useCallback } from 'react';
 
+function extractDraftOps(jsonOrFenced) {
+  try {
+    const m = /```json\s*([\s\S]*?)\s*```/i.exec(jsonOrFenced || '');
+    const raw = m ? m[1] : jsonOrFenced;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    if (!Array.isArray(obj.operations)) obj.operations = [];
+    console.log("extractDraftOps:obj is ok >>>", obj)
+    return obj;
+  } catch (_) {
+    console.log("extractDraftOps:obj is not ok >>>", _)
+    return null;
+  }
+}
+
+function applyDraftOps(draft, ops) {
+  let text = draft || '';
+  for (const op of ops || []) {
+    try {
+      if (op.op === 'replace_all' && typeof op.text === 'string') {
+        text = op.text;
+      } else if (op.op === 'append_section' && op.heading && typeof op.text === 'string') {
+        const section = `\n\n## ${op.heading}\n\n${op.text}`;
+        text = (text || '') + section;
+      } else if (op.op === 'patch' && typeof op.find === 'string' && typeof op.replace === 'string') {
+        const count = Math.max(1, Number(op.count) || 1);
+        let remaining = count;
+        let idx;
+        while (remaining > 0 && (idx = text.indexOf(op.find)) !== -1) {
+          text = text.slice(0, idx) + op.replace + text.slice(idx + op.find.length);
+          remaining--;
+        }
+      } else if (op.op === 'set_title' && typeof op.text === 'string') {
+        const lines = (text || '').split(/\r?\n/);
+        if (lines[0] && /^\s*#\s+/.test(lines[0])) {
+          lines[0] = `# ${op.text}`;
+          text = lines.join('\n');
+        } else {
+          text = `# ${op.text}\n\n` + (text || '');
+        }
+      } else if (op.op === 'replace_range') {
+        const start = Math.max(0, Number(op.start) || 0);
+        const end = Math.max(start, Number(op.end) || start);
+        const t = String(op.text || '');
+        if (end > start && start <= text.length) {
+          const clampedEnd = Math.min(end, text.length);
+          text = text.slice(0, start) + t + text.slice(clampedEnd);
+        }
+      }
+    } catch (_) {
+      // ignore faulty op
+    }
+  }
+  return text;
+}
+
+// --- Line diff utilities (LCS) ---
+function diffLines(aText, bText) {
+  const a = (aText || '').split(/\r?\n/);
+  const b = (bText || '').split(/\r?\n/);
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const hunks = [];
+  let i = 0, j = 0;
+  const push = (type, line) => {
+    const last = hunks[hunks.length - 1];
+    if (last && last.type === type) last.lines.push(line); else hunks.push({ type, lines: [line] });
+  };
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { push('equal', a[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push('del', a[i]); i++; }
+    else { push('add', b[j]); j++; }
+  }
+  while (i < m) { push('del', a[i]); i++; }
+  while (j < n) { push('add', b[j]); j++; }
+  return hunks;
+}
+
+function DiffView({ before, after }) {
+  const hunks = diffLines(before, after);
+  const lineStyle = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: '2px 6px', borderRadius: 6 };
+  const rowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' };
+  const gutter = (symbol, color) => <span style={{ display: 'inline-block', width: 18, color, opacity: 0.9 }}>{symbol}</span>;
+  return (
+    <div style={{ display: 'grid', gap: 4 }}>
+      {hunks.map((h, idx) => {
+        if (h.type === 'equal') {
+          return h.lines.map((ln, k) => (
+            <div key={idx + '-' + k} style={rowStyle}>
+              <div style={lineStyle}>{gutter(' ', '#999')}{ln}</div>
+              <div style={lineStyle}>{gutter(' ', '#999')}{ln}</div>
+            </div>
+          ));
+        } else if (h.type === 'del') {
+          return h.lines.map((ln, k) => (
+            <div key={idx + '-' + k} style={rowStyle}>
+              <div style={{ ...lineStyle, background: '#ffebe9', border: '1px solid #ffb3ad' }}>{gutter('-', '#c33')}{ln}</div>
+              <div />
+            </div>
+          ));
+        } else { // add
+          return h.lines.map((ln, k) => (
+            <div key={idx + '-' + k} style={rowStyle}>
+              <div />
+              <div style={{ ...lineStyle, background: '#e6ffed', border: '1px solid #b4f0c2' }}>{gutter('+', '#2a7')}{ln}</div>
+            </div>
+          ));
+        }
+      })}
+    </div>
+  );
+}
+
+// Character-level diff for inline highlighting
+function diffChars(aText, bText) {
+  const a = Array.from(aText || '');
+  const b = Array.from(bText || '');
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const segs = [];
+  let i = 0, j = 0;
+  const push = (type, ch) => {
+    const last = segs[segs.length - 1];
+    if (last && last.type === type) last.text += ch; else segs.push({ type, text: ch });
+  };
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { push('equal', a[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push('del', a[i]); i++; }
+    else { push('add', b[j]); j++; }
+  }
+  while (i < m) { push('del', a[i]); i++; }
+  while (j < n) { push('add', b[j]); j++; }
+  return segs;
+}
+
+function InlineDiffView({ before, after }) {
+  const hunks = diffLines(before, after);
+  const lineStyle = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: '2px 6px', borderRadius: 6 };
+  const row = (content, bg, border, symbol, color) => (
+    <div style={{ ...lineStyle, background: bg, border: border ? `1px solid ${border}` : 'none' }}>
+      <span style={{ display: 'inline-block', width: 18, color, opacity: 0.9 }}>{symbol}</span>
+      {content}
+    </div>
+  );
+
+  const renderSegments = (segs, focus) => (
+    <>
+      {segs.map((s, i) => {
+        if (s.type === 'equal') return <span key={i}>{s.text}</span>;
+        if (s.type === 'add' && focus === 'add') return <span key={i} style={{ background: '#e6ffed' }}>{s.text}</span>;
+        if (s.type === 'del' && focus === 'del') return <span key={i} style={{ background: '#ffebe9' }}>{s.text}</span>;
+        return <span key={i}>{s.text}</span>;
+      })}
+    </>
+  );
+
+  const out = [];
+  for (let idx = 0; idx < hunks.length; idx++) {
+    const h = hunks[idx];
+    if (h.type === 'equal') {
+      h.lines.forEach((ln, k) => {
+        out.push(<div key={`e-${idx}-${k}`} style={lineStyle}><span style={{ display: 'inline-block', width: 18, color: '#999' }}> </span>{ln}</div>);
+      });
+    } else if (h.type === 'del') {
+      const next = hunks[idx + 1];
+      if (next && next.type === 'add') {
+        const maxLen = Math.max(h.lines.length, next.lines.length);
+        for (let i = 0; i < maxLen; i++) {
+          const a = h.lines[i];
+          const b = next.lines[i];
+          if (a != null && b != null) {
+            const segs = diffChars(a, b);
+            out.push(row(renderSegments(segs, 'del'), '#ffebe9', '#ffb3ad', '-', '#c33'));
+            out.push(row(renderSegments(segs, 'add'), '#e6ffed', '#b4f0c2', '+', '#2a7'));
+          } else if (a != null) {
+            out.push(row(a, '#ffebe9', '#ffb3ad', '-', '#c33'));
+          } else if (b != null) {
+            out.push(row(b, '#e6ffed', '#b4f0c2', '+', '#2a7'));
+          }
+        }
+        idx++; // consume paired add hunk
+      } else {
+        h.lines.forEach((ln, k) => {
+          out.push(row(ln, '#ffebe9', '#ffb3ad', '-', '#c33'));
+        });
+      }
+    } else if (h.type === 'add') {
+      h.lines.forEach((ln, k) => {
+        out.push(row(ln, '#e6ffed', '#b4f0c2', '+', '#2a7'));
+      });
+    }
+  }
+  return <div style={{ display: 'grid', gap: 4 }}>{out}</div>;
+}
+
 export default function App() {
   const [files, setFiles] = useState([]); // [{path,name,title,notes}]
 
@@ -119,19 +324,29 @@ function MainWork({ files, onAdd }) {
         `文件: ${g.fileName} (第${g.page}页)\n内容: ${g.contents?.join(' / ') || ''}\n文本: ${g.text || ''}`
       ).join('\n\n');
       
-      const systemPrompt = `你是一个写作助手。用户正在基于PDF文件中的高亮内容进行写作。以下是用户当前选择的高亮内容：\n\n${context}\n\n请基于这些内容帮助用户进行写作，提供有用的建议、总结或扩展。`;
+      // 将上下文并入用户消息，由主进程加载 SystemPrompt 作为 system
+      const userWithCtx = `${msg}\n\n[上下文]\n${context}`;
       
       // Get current chat history for context
       const messages = chat.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.content
       }));
-      messages.push({ role: 'user', content: msg });
+      messages.push({ role: 'user', content: userWithCtx });
       
-      const result = await window.api.aiChat(messages, systemPrompt);
+      const result = await window.api.aiChat(messages, null);
       
       if (result?.ok) {
-        setChat(c => [...c, { role: 'assistant', content: result.data.content }]);
+        const content = result.data.content || '';
+        setChat(c => [...c, { role: 'assistant', content }]);
+
+        const ops = extractDraftOps(content);
+        if (ops && Array.isArray(ops.operations)) {
+          const proposed = applyDraftOps(activeDraft?.content || '', ops.operations);
+          setPendingOps({ ops, proposedText: proposed, notes: ops.notes || '' });
+          setShowPreview(true);
+          setChat(c => [...c, { role: 'assistant', content: '已生成修改方案，已打开预览面板，请确认后应用。' }]);
+        }
       } else {
         setChat(c => [...c, { role: 'assistant', content: `错误: ${result?.error || '未知错误'}` }]);
       }
@@ -208,6 +423,12 @@ function MainWork({ files, onAdd }) {
   }, []);
 
   const activeDraft = useMemo(() => drafts.find(d => d.id === activeDraftId), [drafts, activeDraftId]);
+  // AI DraftOps preview/apply/undo state
+  const [pendingOps, setPendingOps] = useState(null); // { ops, proposedText, notes }
+  const [showPreview, setShowPreview] = useState(false);
+  const [undoStack, setUndoStack] = useState([]); // previous contents
+  const [redoStack, setRedoStack] = useState([]); // redo contents
+  const [diffMode, setDiffMode] = useState('inline'); // 'inline' | 'side'
 
   const updateDraftContent = useCallback((content) => {
     setDrafts(prev => prev.map(d => 
@@ -378,6 +599,51 @@ function MainWork({ files, onAdd }) {
               +
             </button>
           </div>
+          <button 
+            style={{...styles.smallBtn, marginLeft: 8}}
+            onClick={() => {
+              const last = [...chat].reverse().find(m => m.role === 'assistant');
+              if (!last) return;
+              const ops = extractDraftOps(last.content);
+              if (ops && Array.isArray(ops.operations)) {
+                const proposed = applyDraftOps(activeDraft?.content || '', ops.operations);
+                setPendingOps({ ops, proposedText: proposed, notes: ops?.notes || '' });
+                setShowPreview(true);
+              } else {
+                setChat(c => [...c, { role: 'assistant', content: '未找到可解析的 DraftOps JSON。' }]);
+              }
+            }}
+          >
+            预览上条AI修改
+          </button>
+          <button 
+            style={{...styles.smallBtn, marginLeft: 8, opacity: undoStack.length ? 1 : 0.6, cursor: undoStack.length ? 'pointer' : 'not-allowed'}}
+            disabled={!undoStack.length}
+            onClick={() => {
+              if (!undoStack.length) return;
+              const prev = undoStack[undoStack.length - 1];
+              setUndoStack(undoStack.slice(0, -1));
+              setRedoStack(r => [...r, activeDraft?.content || '']);
+              updateDraftContent(prev);
+              setChat(c => [...c, { role: 'assistant', content: '已撤销上次 AI 修改。' }]);
+            }}
+          >
+            撤销上次AI修改
+          </button>
+          <button 
+            style={{...styles.smallBtn, marginLeft: 8, opacity: redoStack.length ? 1 : 0.6, cursor: redoStack.length ? 'pointer' : 'not-allowed'}}
+            disabled={!redoStack.length}
+            onClick={() => {
+              if (!redoStack.length) return;
+              const next = redoStack[redoStack.length - 1];
+              setRedoStack(redoStack.slice(0, -1));
+              setUndoStack(u => [...u, activeDraft?.content || '']);
+              updateDraftContent(next);
+              setChat(c => [...c, { role: 'assistant', content: '已重做上次 AI 修改。' }]);
+            }}
+          >
+            重做
+          </button>
         </div>
         <textarea
           placeholder="开始写作…（支持从左侧笔记拖拽/复制到此）"
@@ -404,7 +670,61 @@ function MainWork({ files, onAdd }) {
           ))}
         </div>
         <ChatInput onSend={sendMsg} disabled={!chatActive} />
-      </section>
+  </section>
+      {/* 预览面板（简单对比） */}
+      {showPreview && (
+        <div style={styles.previewOverlay}>
+          <div style={styles.previewPanel}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontWeight: 600 }}>AI 修改预览</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button 
+                  style={styles.smallBtn}
+                  onClick={() => setDiffMode(m => m === 'inline' ? 'side' : 'inline')}
+                >
+                  切换为{diffMode === 'inline' ? '双栏' : '单栏'}
+                </button>
+                <button style={styles.smallBtn} onClick={() => setShowPreview(false)}>关闭</button>
+              </div>
+            </div>
+            {pendingOps?.notes && (
+              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>摘要：{pendingOps.notes}</div>
+            )}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
+                <div>原字符: {(activeDraft?.content || '').length}</div>
+                <div>新字符: {(pendingOps?.proposedText || '').length} (Δ {(pendingOps?.proposedText || '').length - (activeDraft?.content || '').length})</div>
+                <div>原行数: {(activeDraft?.content || '').split(/\r?\n/).length}</div>
+                <div>新行数: {(pendingOps?.proposedText || '').split(/\r?\n/).length} (Δ {(pendingOps?.proposedText || '').split(/\r?\n/).length - (activeDraft?.content || '').split(/\r?\n/).length})</div>
+              </div>
+              <div style={{ maxHeight: '60vh', overflow: 'auto', border: '1px solid #ddd', borderRadius: 8, padding: 8 }}>
+                {diffMode === 'inline' ? (
+                  <InlineDiffView before={activeDraft?.content || ''} after={pendingOps?.proposedText || ''} />
+                ) : (
+                  <DiffView before={activeDraft?.content || ''} after={pendingOps?.proposedText || ''} />
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+                <button style={styles.smallBtn} onClick={() => setShowPreview(false)}>取消</button>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => {
+                    const before = activeDraft?.content || '';
+                    setUndoStack(prev => [...prev, before]);
+                    updateDraftContent(pendingOps?.proposedText || '');
+                    setRedoStack([]);
+                    setShowPreview(false);
+                    setPendingOps(null);
+                    setChat(c => [...c, { role: 'assistant', content: '已应用 AI 修改并可撤销。' }]);
+                  }}
+                >
+                  应用更改
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -578,3 +898,33 @@ const styles = {
   chatInput: { flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #8885' }
 };
 
+// 预览样式
+styles.previewOverlay = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.35)',
+  display: 'grid',
+  placeItems: 'center',
+  zIndex: 999
+};
+styles.previewPanel = {
+  width: '90vw',
+  maxWidth: 1100,
+  maxHeight: '90vh',
+  background: '#fff',
+  border: '1px solid #8883',
+  borderRadius: 12,
+  padding: 14,
+  overflow: 'auto'
+};
+styles.previewTextarea = {
+  width: '100%',
+  height: '50vh',
+  border: '1px solid #8883',
+  borderRadius: 8,
+  padding: 8,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontSize: 12,
+  lineHeight: 1.5,
+  resize: 'vertical'
+};

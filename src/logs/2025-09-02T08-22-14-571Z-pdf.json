@@ -1,0 +1,13 @@
+{
+  "type": "pdf:extractHighlights",
+  "timestamp": "2025-09-02T08:22:14.568Z",
+  "duration_ms": 969,
+  "request": {
+    "filePaths": [
+      "/Users/zhangtingzhao/Desktop/2508.15595v1.pdf"
+    ]
+  },
+  "response": {
+    "count": 1
+  }
+}

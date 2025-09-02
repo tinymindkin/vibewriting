@@ -39,6 +39,7 @@
     "files": [
       "src/main/**",
       "src/preload/**",
+      "src/prompts/**",
       "dist/**",
       "!**/*.map",
       "!src/renderer/**",

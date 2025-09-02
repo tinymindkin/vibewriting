@@ -6,6 +6,42 @@ require('dotenv').config();
 const OpenAI = require('openai');
 
 let mainWindow = null;
+let cachedSystemPrompt = null;
+
+function getSystemPrompt() {
+  if (cachedSystemPrompt) return cachedSystemPrompt;
+  try {
+    const p = path.resolve(__dirname, '../prompts/SystemPrompt.md');
+    cachedSystemPrompt = fs.readFileSync(p, 'utf8');
+  } catch (e) {
+    cachedSystemPrompt = 'You are a helpful writing assistant.';
+  }
+  return cachedSystemPrompt;
+}
+
+function getLogDir() {
+  const configured = process.env.LOG_PATH || '';
+  // If absolute path provided, use it; otherwise resolve relative to CWD
+  const dir = path.isAbsolute(configured) && configured
+    ? configured
+    : path.resolve(process.cwd(), configured || 'logs');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
+function writeLog(kind, data) {
+  try {
+    const dir = getLogDir();
+    const ts = new Date();
+    const stamp = ts.toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dir, `${stamp}-${kind}.json`);
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    return file;
+  } catch (e) {
+    console.error('[LOG] failed to write log:', e);
+    return null;
+  }
+}
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -52,8 +88,8 @@ ipcMain.handle('ping', () => 'pong');
 
 ipcMain.handle('dialog:openPDFs', async () => {
   const res = await dialog.showOpenDialog({
-    title: '按住cmmand键选择多个 PDF 文件',
-    buttonLabel: '选择（按住cmmand键选择多个）',
+    title: '按住 Command 键选择多个 PDF 文件',
+    buttonLabel: '选择（可多选）',
     properties: [
       'openFile',
       'multiSelections',
@@ -87,35 +123,74 @@ ipcMain.handle('dialog:openPDFs', async () => {
 
 ipcMain.handle('pdf:extractHighlights', async (_evt, filePaths) => {
   try {
+    const startedAt = Date.now();
     const result = await extractHighlightsFromFiles(filePaths);
+    writeLog('pdf', {
+      type: 'pdf:extractHighlights',
+      timestamp: new Date().toISOString(),
+      duration_ms: Date.now() - startedAt,
+      request: { filePaths },
+      response: { count: Array.isArray(result) ? result.length : 0 }
+    });
     return { ok: true, data: result };
   } catch (e) {
+    writeLog('pdf', {
+      type: 'pdf:extractHighlights',
+      timestamp: new Date().toISOString(),
+      error: e?.message || String(e),
+      request: { filePaths }
+    });
     return { ok: false, error: e?.message || String(e) };
   }
 });
 
 ipcMain.handle('ai:chat', async (_evt, messages, systemPrompt) => {
   try {
-    const completion = await openai.chat.completions.create({
-      model: process.env.MODEL_NAME || 'qwen-max-latest',
+    const startedAt = Date.now();
+    const system = systemPrompt || getSystemPrompt();
+    const reqBody = {
+      model: process.env.MODEL_NAME || 'gpt-5',
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: system },
         ...messages
       ],
       temperature: 0.7,
       max_tokens: 2000,
       stream: false
-    });
+    };
+    const completion = await openai.chat.completions.create(reqBody);
 
-    return { 
+    const responsePayload = { 
       ok: true, 
       data: {
         content: completion.choices[0].message.content,
         usage: completion.usage
       }
     };
+
+    writeLog('ai', {
+      type: 'ai:chat',
+      timestamp: new Date().toISOString(),
+      duration_ms: Date.now() - startedAt,
+      request: {
+        model: reqBody.model,
+        temperature: reqBody.temperature,
+        max_tokens: reqBody.max_tokens,
+        system,
+        messages: reqBody.messages
+      },
+      response: responsePayload.data
+    });
+
+    return responsePayload;
   } catch (e) {
     console.error('[AI] Chat error:', e);
+    writeLog('ai', {
+      type: 'ai:chat',
+      timestamp: new Date().toISOString(),
+      error: e?.message || String(e),
+      request: { model: process.env.MODEL_NAME || 'gpt-5' }
+    });
     return { ok: false, error: e?.message || String(e) };
   }
 });
