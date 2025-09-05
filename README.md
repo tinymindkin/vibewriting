@@ -1,9 +1,9 @@
-# VibeWriting (Electron)
+# VibeWriting 
 
-一个最小可运行的 Electron 应用骨架，用于快速开始。
 
 ## 项目介绍
 
+类似于curor的写作工具，像vibe coding 一样 vibe writing.
 
 ## 运行要求
 - 已安装 Node.js (建议 18+)
