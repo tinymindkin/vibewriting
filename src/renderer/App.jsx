@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useCallback } from 'react';
+import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 
 function extractDraftOps(jsonOrFenced) {
   try {
@@ -116,6 +116,101 @@ function DiffView({ before, after }) {
       })}
     </div>
   );
+}
+
+// 带控制箭头的双栏 Diff（基于基线 before vs proposed）
+function DiffViewWithControls({ before, proposed, selections, onToggle }) {
+  const hunks = useMemo(() => diffLines(before, proposed), [before, proposed]);
+  const lineStyle = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: '2px 6px', borderRadius: 6 };
+  const rowStyle = { display: 'grid', gridTemplateColumns: '1fr 34px 1fr', gap: 8, alignItems: 'start' }; 
+  const leftCell = (el) => <div style={lineStyle}>{el}</div>;
+  const rightCell = (el) => <div style={lineStyle}>{el}</div>;
+  const badge = (symbol, color) => <span style={{ display: 'inline-block', width: 18, color, opacity: 0.9 }}>{symbol}</span>;
+  const btnStyle = (active) => ({
+    width: 26, height: 20, borderRadius: 4, border: '1px solid #8884', cursor: 'pointer', fontSize: 12,
+    background: active ? '#e9f2ff' : '#f8f8f8', color: active ? '#2563eb' : '#333'
+  });
+
+  const rows = [];
+  let blockIdx = 0;
+  for (let i = 0; i < hunks.length; i++) {
+    const h = hunks[i];
+    if (h.type === 'equal') {
+      h.lines.forEach((ln, k) => {
+        rows.push(
+          <div key={`eq-${i}-${k}`} style={rowStyle}>
+            {leftCell(<>{badge(' ', '#999')}{ln}</>)}
+            <div />
+            {rightCell(<>{badge(' ', '#999')}{ln}</>)}
+          </div>
+        );
+      });
+      continue;
+    }
+
+    const next = hunks[i + 1];
+    if (h.type === 'del' && next?.type === 'add') {
+      const maxLen = Math.max(h.lines.length, next.lines.length);
+      for (let k = 0; k < maxLen; k++) {
+        const a = h.lines[k];
+        const b = next.lines[k];
+        const accepted = !!selections[blockIdx];
+        rows.push(
+          <div key={`pair-${i}-${k}`} style={rowStyle}>
+            {leftCell(a != null ? <>{badge('-', '#c33')}{a}</> : <></>)}
+            {k === 0 ? (
+              <div style={{ display: 'grid', gap: 4, alignContent: 'start', justifyItems: 'center' }}>
+                <button title="保留原文" style={btnStyle(!selections[blockIdx])} onClick={() => onToggle(blockIdx, false)}>←</button>
+                <button title="采用修改" style={btnStyle(!!selections[blockIdx])} onClick={() => onToggle(blockIdx, true)}>→</button>
+              </div>
+            ) : <div />}
+            {rightCell(
+              accepted
+                ? (b != null ? <>{badge('+', '#2a7')}{b}</> : <></>)
+                : (a != null ? <>{badge(' ', '#999')}{a}</> : <></>)
+            )}
+          </div>
+        );
+      }
+      i++; // consume add
+      blockIdx++;
+    } else if (h.type === 'del') {
+      h.lines.forEach((ln, k) => {
+        const accepted = !!selections[blockIdx];
+        rows.push(
+          <div key={`del-${i}-${k}`} style={rowStyle}>
+            {leftCell(<>{badge('-', '#c33')}{ln}</>)}
+            {k === 0 ? (
+              <div style={{ display: 'grid', gap: 4, alignContent: 'start', justifyItems: 'center' }}>
+                <button title="保留原文" style={btnStyle(!selections[blockIdx])} onClick={() => onToggle(blockIdx, false)}>←</button>
+                <button title="采用修改(删除)" style={btnStyle(!!selections[blockIdx])} onClick={() => onToggle(blockIdx, true)}>→</button>
+              </div>
+            ) : <div />}
+            {rightCell(accepted ? <></> : <>{badge(' ', '#999')}{ln}</>)}
+          </div>
+        );
+      });
+      blockIdx++;
+    } else if (h.type === 'add') {
+      h.lines.forEach((ln, k) => {
+        const accepted = !!selections[blockIdx];
+        rows.push(
+          <div key={`add-${i}-${k}`} style={rowStyle}>
+            <div />
+            {k === 0 ? (
+              <div style={{ display: 'grid', gap: 4, alignContent: 'start', justifyItems: 'center' }}>
+                <button title="不新增" style={btnStyle(!selections[blockIdx])} onClick={() => onToggle(blockIdx, false)}>←</button>
+                <button title="新增此行" style={btnStyle(!!selections[blockIdx])} onClick={() => onToggle(blockIdx, true)}>→</button>
+              </div>
+            ) : <div />}
+            {rightCell(accepted ? <>{badge('+', '#2a7')}{ln}</> : <></>)}
+          </div>
+        );
+      });
+      blockIdx++;
+    }
+  }
+  return <div style={{ display: 'grid', gap: 4 }}>{rows}</div>;
 }
 
 // Character-level diff for inline highlighting
@@ -428,7 +523,7 @@ function MainWork({ files, onAdd }) {
   const [showPreview, setShowPreview] = useState(false);
   const [undoStack, setUndoStack] = useState([]); // previous contents
   const [redoStack, setRedoStack] = useState([]); // redo contents
-  const [diffMode, setDiffMode] = useState('inline'); // 'inline' | 'side'
+  const [diffMode, setDiffMode] = useState('side'); // 'inline' | 'side'
 
   const updateDraftContent = useCallback((content) => {
     setDrafts(prev => prev.map(d => 
@@ -483,6 +578,69 @@ function MainWork({ files, onAdd }) {
   const cancelEditing = useCallback(() => {
     setEditingTabId(null);
     setEditingTitle('');
+  }, []);
+
+  // Diff 预览：基线与选择集
+  const beforeText = activeDraft?.content || '';
+  const proposedText = pendingOps?.proposedText || '';
+  const baselineHunks = useMemo(() => {
+    if (!pendingOps) return [];
+    return diffLines(beforeText, proposedText);
+  }, [pendingOps, beforeText, proposedText]);
+
+  const blockCount = useMemo(() => {
+    let count = 0;
+    for (let i = 0; i < baselineHunks.length; i++) {
+      const h = baselineHunks[i];
+      if (h.type === 'equal') continue;
+      if (h.type === 'del' && baselineHunks[i + 1]?.type === 'add') { count++; i++; }
+      else { count++; }
+    }
+    return count;
+  }, [baselineHunks]);
+
+  const [diffSelections, setDiffSelections] = useState(null);
+  const prevSelKey = useRef('');
+  useEffect(() => {
+    if (!pendingOps) { setDiffSelections(null); prevSelKey.current = 'none'; return; }
+    const key = `${beforeText.length}|${proposedText.length}|${blockCount}`;
+    if (prevSelKey.current !== key) {
+      const sel = {};
+      for (let i = 0; i < blockCount; i++) sel[i] = true; // 默认全部采用修改
+      setDiffSelections(sel);
+      prevSelKey.current = key;
+    }
+  }, [pendingOps, beforeText, proposedText, blockCount]);
+
+  const chosenAfterText = useMemo(() => {
+    if (!pendingOps || !diffSelections) return proposedText || '';
+    const out = [];
+    let blockIdx = 0;
+    for (let i = 0; i < baselineHunks.length; i++) {
+      const h = baselineHunks[i];
+      if (h.type === 'equal') {
+        for (const ln of h.lines) out.push(ln);
+        continue;
+      }
+      const next = baselineHunks[i + 1];
+      const accepted = !!diffSelections[blockIdx];
+      if (h.type === 'del' && next?.type === 'add') {
+        if (accepted) { for (const ln of next.lines) out.push(ln); } else { for (const ln of h.lines) out.push(ln); }
+        i++;
+        blockIdx++;
+      } else if (h.type === 'del') {
+        if (!accepted) { for (const ln of h.lines) out.push(ln); }
+        blockIdx++;
+      } else if (h.type === 'add') {
+        if (accepted) { for (const ln of h.lines) out.push(ln); }
+        blockIdx++;
+      }
+    }
+    return out.join('\n');
+  }, [pendingOps, diffSelections, baselineHunks, proposedText]);
+
+  const toggleBlock = useCallback((idx, accept) => {
+    setDiffSelections(prev => ({ ...(prev || {}), [idx]: accept == null ? !prev[idx] : !!accept }));
   }, []);
 
   return (
@@ -547,7 +705,7 @@ function MainWork({ files, onAdd }) {
         onMouseDown={handleMouseDown('left')}
       />
 
-      {/* 中栏：写作区域 */}
+      {/* 中栏：写作区域（支持在同一窗口内显示 Diff 预览） */}
       <main style={styles.centerPane}>
         <div style={styles.editorHeader}>
           <div style={styles.tabContainer}>
@@ -599,58 +757,91 @@ function MainWork({ files, onAdd }) {
               +
             </button>
           </div>
-          <button 
-            style={{...styles.smallBtn, marginLeft: 8}}
-            onClick={() => {
-              const last = [...chat].reverse().find(m => m.role === 'assistant');
-              if (!last) return;
-              const ops = extractDraftOps(last.content);
-              if (ops && Array.isArray(ops.operations)) {
-                const proposed = applyDraftOps(activeDraft?.content || '', ops.operations);
-                setPendingOps({ ops, proposedText: proposed, notes: ops?.notes || '' });
-                setShowPreview(true);
-              } else {
-                setChat(c => [...c, { role: 'assistant', content: '未找到可解析的 DraftOps JSON。' }]);
-              }
-            }}
-          >
-            预览上条AI修改
-          </button>
-          <button 
-            style={{...styles.smallBtn, marginLeft: 8, opacity: undoStack.length ? 1 : 0.6, cursor: undoStack.length ? 'pointer' : 'not-allowed'}}
-            disabled={!undoStack.length}
-            onClick={() => {
-              if (!undoStack.length) return;
-              const prev = undoStack[undoStack.length - 1];
-              setUndoStack(undoStack.slice(0, -1));
-              setRedoStack(r => [...r, activeDraft?.content || '']);
-              updateDraftContent(prev);
-              setChat(c => [...c, { role: 'assistant', content: '已撤销上次 AI 修改。' }]);
-            }}
-          >
-            撤销上次AI修改
-          </button>
-          <button 
-            style={{...styles.smallBtn, marginLeft: 8, opacity: redoStack.length ? 1 : 0.6, cursor: redoStack.length ? 'pointer' : 'not-allowed'}}
-            disabled={!redoStack.length}
-            onClick={() => {
-              if (!redoStack.length) return;
-              const next = redoStack[redoStack.length - 1];
-              setRedoStack(redoStack.slice(0, -1));
-              setUndoStack(u => [...u, activeDraft?.content || '']);
-              updateDraftContent(next);
-              setChat(c => [...c, { role: 'assistant', content: '已重做上次 AI 修改。' }]);
-            }}
-          >
-            重做
-          </button>
+          {/* 编辑/对比 视图切换 */}
+          <div style={styles.segmented}>
+            <button
+              style={{ ...styles.segmentBtn, ...(showPreview ? {} : styles.segmentBtnActive) }}
+              onClick={() => setShowPreview(false)}
+            >
+              编辑
+            </button>
+            <button
+              style={{ ...styles.segmentBtn, ...(showPreview ? styles.segmentBtnActive : {}), ...(pendingOps ? {} : { opacity: 0.6, cursor: 'not-allowed' }) }}
+              onClick={() => { if (pendingOps) setShowPreview(true); }}
+              disabled={!pendingOps}
+            >
+              对比
+            </button>
+          </div>
+          
+          {pendingOps && (
+            <button 
+              style={{...styles.smallBtn, marginLeft: 8}}
+              onClick={() => { setPendingOps(null); setShowPreview(false); }}
+            >
+              丢弃方案
+            </button>
+          )}
         </div>
-        <textarea
-          placeholder="开始写作…（支持从左侧笔记拖拽/复制到此）"
-          value={activeDraft?.content || ''}
-          onChange={e => updateDraftContent(e.target.value)}
-          style={styles.textarea}
-        />
+        {showPreview && pendingOps ? (
+          <div style={styles.diffWrap}>
+            <div style={styles.diffToolbar}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <strong>AI 修改预览</strong>
+                {pendingOps?.notes && (
+                  <span style={{ fontSize: 12, opacity: 0.8 }}>摘要：{pendingOps.notes}</span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button 
+                  style={styles.smallBtn}
+                  onClick={() => setDiffMode(m => m === 'inline' ? 'side' : 'inline')}
+                >
+                  切换为{diffMode === 'inline' ? '双栏' : '单栏'}
+                </button>
+                <button style={styles.smallBtn} onClick={() => { setShowPreview(false); }}>返回编辑</button>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => {
+                    const before = activeDraft?.content || '';
+                    setUndoStack(prev => [...prev, before]);
+                    updateDraftContent(chosenAfterText || '');
+                    setRedoStack([]);
+                    setShowPreview(false);
+                    setPendingOps(null);
+                    setChat(c => [...c, { role: 'assistant', content: '已应用 AI 修改并可撤销。' }]);
+                  }}
+                >
+                  应用更改
+                </button>
+              </div>
+            </div>
+            <div style={styles.diffStats}>
+              <div>原字符: {beforeText.length}</div>
+              <div>新字符: {chosenAfterText.length} (Δ {chosenAfterText.length - beforeText.length})</div>
+              <div>原行数: {beforeText.split(/\r?\n/).length}</div>
+              <div>新行数: {chosenAfterText.split(/\r?\n/).length} (Δ {chosenAfterText.split(/\r?\n/).length - beforeText.split(/\r?\n/).length})</div>
+            </div>
+            <div style={styles.diffBox}>
+              {diffMode === 'inline' ? (
+                <InlineDiffView before={beforeText} after={chosenAfterText} />
+              ) : (
+                diffSelections ? (
+                  <DiffViewWithControls before={beforeText} proposed={proposedText} selections={diffSelections} onToggle={toggleBlock} />
+                ) : (
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>正在准备对比视图…</div>
+                )
+              )}
+            </div>
+          </div>
+        ) : (
+          <textarea
+            placeholder="开始写作…（支持从左侧笔记拖拽/复制到此）"
+            value={activeDraft?.content || ''}
+            onChange={e => updateDraftContent(e.target.value)}
+            style={styles.textarea}
+          />
+        )}
       </main>
 
       {/* 右侧调整柄 */}
@@ -671,60 +862,7 @@ function MainWork({ files, onAdd }) {
         </div>
         <ChatInput onSend={sendMsg} disabled={!chatActive} />
   </section>
-      {/* 预览面板（简单对比） */}
-      {showPreview && (
-        <div style={styles.previewOverlay}>
-          <div style={styles.previewPanel}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontWeight: 600 }}>AI 修改预览</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button 
-                  style={styles.smallBtn}
-                  onClick={() => setDiffMode(m => m === 'inline' ? 'side' : 'inline')}
-                >
-                  切换为{diffMode === 'inline' ? '双栏' : '单栏'}
-                </button>
-                <button style={styles.smallBtn} onClick={() => setShowPreview(false)}>关闭</button>
-              </div>
-            </div>
-            {pendingOps?.notes && (
-              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>摘要：{pendingOps.notes}</div>
-            )}
-            <div style={{ marginTop: 10 }}>
-              <div style={{ display: 'flex', gap: 16, fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-                <div>原字符: {(activeDraft?.content || '').length}</div>
-                <div>新字符: {(pendingOps?.proposedText || '').length} (Δ {(pendingOps?.proposedText || '').length - (activeDraft?.content || '').length})</div>
-                <div>原行数: {(activeDraft?.content || '').split(/\r?\n/).length}</div>
-                <div>新行数: {(pendingOps?.proposedText || '').split(/\r?\n/).length} (Δ {(pendingOps?.proposedText || '').split(/\r?\n/).length - (activeDraft?.content || '').split(/\r?\n/).length})</div>
-              </div>
-              <div style={{ maxHeight: '60vh', overflow: 'auto', border: '1px solid #ddd', borderRadius: 8, padding: 8 }}>
-                {diffMode === 'inline' ? (
-                  <InlineDiffView before={activeDraft?.content || ''} after={pendingOps?.proposedText || ''} />
-                ) : (
-                  <DiffView before={activeDraft?.content || ''} after={pendingOps?.proposedText || ''} />
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-                <button style={styles.smallBtn} onClick={() => setShowPreview(false)}>取消</button>
-                <button
-                  style={styles.primaryBtn}
-                  onClick={() => {
-                    const before = activeDraft?.content || '';
-                    setUndoStack(prev => [...prev, before]);
-                    updateDraftContent(pendingOps?.proposedText || '');
-                    setRedoStack([]);
-                    setShowPreview(false);
-                    setPendingOps(null);
-                    setChat(c => [...c, { role: 'assistant', content: '已应用 AI 修改并可撤销。' }]);
-                  }}
-                >
-                  应用更改
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 原弹窗预览已改为中心面板内联显示 */}
     </div>
   );
 }
@@ -875,6 +1013,15 @@ const styles = {
     color: '#666'
   },
   textarea: { width: '100%', height: '100%', border: 'none', outline: 'none', padding: 12, fontSize: 15, lineHeight: 1.6, resize: 'none' },
+  
+  // 内联 Diff 样式
+  diffWrap: { display: 'grid', gridTemplateRows: 'auto auto 1fr', height: '100%', overflow: 'hidden' },
+  diffToolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid #eee' },
+  diffStats: { display: 'flex', gap: 16, fontSize: 12, opacity: 0.8, padding: '8px 12px', borderBottom: '1px solid #f0f0f0' },
+  diffBox: { maxHeight: '100%', overflow: 'auto', padding: 8 },
+  segmented: { display: 'flex', border: '1px solid #8883', borderRadius: 8, overflow: 'hidden' },
+  segmentBtn: { background: 'transparent', border: 'none', padding: '6px 10px', cursor: 'pointer', fontSize: 12 },
+  segmentBtnActive: { background: '#e9f2ff', color: '#2563eb', fontWeight: 600 },
 
   rightPane: { display: 'grid', gridTemplateRows: 'auto 1fr auto', overflow: 'hidden', height: '100vh' },
   chatHeader: { padding: '10px 12px', borderBottom: '1px solid #8883', fontWeight: 600 },
@@ -899,32 +1046,4 @@ const styles = {
 };
 
 // 预览样式
-styles.previewOverlay = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(0,0,0,0.35)',
-  display: 'grid',
-  placeItems: 'center',
-  zIndex: 999
-};
-styles.previewPanel = {
-  width: '90vw',
-  maxWidth: 1100,
-  maxHeight: '90vh',
-  background: '#fff',
-  border: '1px solid #8883',
-  borderRadius: 12,
-  padding: 14,
-  overflow: 'auto'
-};
-styles.previewTextarea = {
-  width: '100%',
-  height: '50vh',
-  border: '1px solid #8883',
-  borderRadius: 8,
-  padding: 8,
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: 12,
-  lineHeight: 1.5,
-  resize: 'vertical'
-};
+// 旧弹窗样式移除（改为中间面板内联显示）

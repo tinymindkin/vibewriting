@@ -1,0 +1,15 @@
+{
+  "type": "pdf:extractHighlights",
+  "timestamp": "2025-09-05T20:28:04.665Z",
+  "duration_ms": 854,
+  "request": {
+    "filePaths": [
+      "/Users/zhangtingzhao/Documents/Proj/vibewriting/tests/files/2508.15082v1.pdf",
+      "/Users/zhangtingzhao/Documents/Proj/vibewriting/tests/files/2508.15595v1.pdf",
+      "/Users/zhangtingzhao/Documents/Proj/vibewriting/tests/files/advance and challenges.pdf"
+    ]
+  },
+  "response": {
+    "count": 3
+  }
+}
